@@ -1,0 +1,337 @@
+---
+title: "The Power of Tolerance versus Unselfishness as a Cultural Determinant of Cooperation"
+author: "Kimmo Eriksson, Brent Simpson, Irina Vartanova"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 7.1, fig.height = 3.15, 
+                      out.width = "60%", fig.align = 'center',
+                      dpi = 300, dev="jpeg", tidy = TRUE)
+
+library(tidyverse)
+library(haven)
+library(modelsummary)
+library(broom)
+library(knitr)
+library(lme4)
+library(broom.mixed)
+
+coop <- read_sav("../data/country-level.sav")
+cp_ind <- read_sav("../data/individual-level.sav")
+
+```
+
+# Results
+
+## Society-Level Analysis
+
+### Table 1
+
+```{r}
+
+summry_tbl <- coop %>% 
+  select(`Valuation of unselfishness` = child_unselfishness,
+         `Valuation of tolerance` = child_tolerance,
+         `Cooperative behavior in PD` = coop_behave,
+         `Cooperative norm in CPR` = coop_norm,
+         `Metanorm against physical confrontation` = mn_against_phys,
+         `Metanorm in favor of gossip` = mn_pro_gossip,
+         `Absence of infectious diseases` = PathogenAbsence,
+         `Societal relational mobility` = RelationalMobility,
+         `Median income (thousands of dollars)` = Median_income,
+         `Indulgence` = Hofstede_Indulgence,
+         `Trust` = trust)
+
+N <- function(x) sprintf("%.0f", sum(!is.na(x)))
+
+datasummary(All(as.data.frame(summry_tbl)) ~ N + Min + Max + Mean + SD,
+            data = summry_tbl,
+            fmt = "%.1f",
+            title = 'Table 1. Descriptive Statistics of Key Variables')
+  
+```
+### Table 2
+
+```{r}
+
+boot_cor <- function(data, i) {
+  cor(data[i, "value1"], data[i, "value2"], 
+      method='pearson', use = "pair")
+}
+
+cor_tbl <- coop %>% 
+  select(code,
+         `Cooperative Behavior` = coop_behave,
+         `Cooperative Norm` = coop_norm,
+         `Metanorm against physical confrontation` = mn_against_phys,
+         `Metanorm in favor of gossip` = mn_pro_gossip)
+
+cor_tbl_long <- left_join(
+  cor_tbl %>% 
+    gather(measure1, value1, -code),
+  cor_tbl %>% 
+    select(-`Cooperative Behavior`) %>% 
+    gather(measure2, value2, -code) 
+) %>% 
+  drop_na(value1, value2)
+
+boot_est <- cor_tbl_long %>% 
+  filter(measure1 < measure2) %>% 
+  group_nest(measure1, measure2) %>% 
+  mutate(b = map(data, ~boot::boot(., boot_cor, R = 2000)), 
+         map_df(b, tidy, conf.int = TRUE, conf.method = "bca"))
+
+options(knitr.kable.NA = '')
+
+boot_est %>% 
+  mutate(N = map_dbl(data, nrow),
+         cor_ci = sprintf("%.2f [%.2f, %.2f]", 
+                          statistic, conf.low, conf.high)) %>% 
+  select(measure1, measure2, cor_ci) %>% 
+  spread(measure1, cor_ci) %>% 
+  kable(col.names = c(" ", "\\(1\\)", "\\(2\\)", "\\(3\\)"),
+        title = "Table 2. Pearson Correlations between Cooperative Behavior, Cooperative Norms, and Cooperative Metanorms")
+
+
+```
+### Index mesures alpha
+
+```{r}
+
+coop <- coop %>% 
+  mutate_at(vars(coop_behave, coop_norm, mn_against_phys, mn_pro_gossip),
+            ~scale(.)[,1]) %>% 
+  mutate(coop_index = rowMeans(select(., 
+                                    coop_behave, coop_norm,
+                                    mn_against_phys, mn_pro_gossip),
+                             na.rm = TRUE)) 
+
+alpha_est <- psych::alpha(select(coop, 
+                                 coop_behave, coop_norm, 
+                                 mn_against_phys, mn_pro_gossip)) 
+round(alpha_est$total$raw_alpha, 2)
+round(alpha_est$alpha.drop$raw_alpha[1],2)
+
+```
+### Table 3
+
+```{r}
+
+boot_est <- coop %>% 
+  gather(measure1, value1, 
+         PathogenAbsence, RelationalMobility:trust) %>% 
+  gather(measure2, value2, 
+         child_tolerance, child_unselfishness) %>% 
+  drop_na(value1, value2) %>% 
+  mutate(measure1 = factor(measure1, 
+                           levels = c(
+                             "PathogenAbsence",
+                             "RelationalMobility",
+                             "Median_income",
+                             "Hofstede_Indulgence",
+                             "trust"
+                           ),
+                           labels = c(
+                             "Absence of pathogens", 
+                             "Relational Mobility",
+                             "Median income", 
+                             "Indulgence", 
+                             "Trust"
+                             )),
+         measure2 = factor(measure2, 
+                           levels = c(
+                             "child_unselfishness",
+                             "child_tolerance"
+                           ),
+                           labels = c(
+                             "Unselfishness", 
+                             "Tolerance"))) %>% 
+  group_nest(measure1, measure2) %>% 
+  mutate(b = map(data, ~boot::boot(., boot_cor, R = 2000)), 
+         map_df(b, tidy, conf.int = TRUE, conf.method = "bca"))
+
+boot_est %>% 
+  mutate(N = map_dbl(data, nrow),
+         cor_ci = sprintf("%.2f [%.2f, %.2f]", 
+                          statistic, conf.low, conf.high)) %>% 
+  select(measure1, measure2, N, cor_ci) %>% 
+  spread(measure2, cor_ci) %>% 
+  kable(col.names = c("Predictor Variable", "N", 
+                      "Correlation with valuation of unselfishness",
+                      "Correlation with valuation of tolerance"),
+        title = "Table 3. Pearson Correlations between Valuations of Personal Qualities and Other Predictors of Cooperation")
+
+
+```
+
+### Table 4
+
+```{r}
+
+long_data <- coop %>% 
+  gather(measure1, value1, 
+         coop_index, 
+         coop_behave, coop_norm,
+         mn_against_phys, mn_pro_gossip) %>% 
+  gather(measure2, value2, 
+         child_tolerance, child_unselfishness,
+         PathogenAbsence, RelationalMobility:trust) %>% 
+  mutate(measure1 = factor(measure1, 
+                           levels = c(
+                             "coop_index", 
+                             "coop_behave", 
+                             "coop_norm",
+                             "mn_against_phys", 
+                             "mn_pro_gossip"
+                           ),
+                           labels = c(
+                             "Cooperation index",
+                             "Cooperation behavior in PD", 
+                             "Cooperative Norm in CPR", 
+                             "Metanorm against physical confrontation", 
+                             "Metanorm for gossip"
+                             )),
+         measure2 = factor(measure2, 
+                           levels = c(
+                             "child_unselfishness",
+                             "child_tolerance", 
+                             "PathogenAbsence",
+                             "RelationalMobility",
+                             "Median_income",
+                             "Hofstede_Indulgence",
+                             "trust"
+                           ),
+                           labels = c(
+                             "Unselfishness", 
+                             "Tolerance", 
+                             "Absence of pathogens", 
+                             "Relational Mobility",
+                             "Median income", 
+                             "Indulgence", 
+                             "Trust"
+                             ))) 
+
+
+boot_est <- long_data %>% 
+  drop_na(value1, value2) %>% 
+  filter(measure2 %in% c("Unselfishness", "Tolerance")) %>%
+  group_nest(measure1, measure2) %>% 
+  mutate(b = map(data, ~boot::boot(., boot_cor, R = 2000)), 
+         map_df(b, tidy, conf.int = TRUE, conf.method = "bca"))
+
+boot_est %>% 
+  mutate(N = map_dbl(data, nrow),
+         cor_ci = sprintf("%.2f [%.2f, %.2f]", 
+                          statistic, conf.low, conf.high)) %>% 
+  select(measure1, measure2, N, cor_ci) %>% 
+  spread(measure2, cor_ci) %>% 
+  kable(col.names = c("Dependent Variable", "N", 
+                      "Correlation with valuation of unselfishness",
+                      "Correlation with valuation of tolerance"),
+        title = "Table 4. Pearson Correlations between Valuations of Personal Qualities and Measures Related to Cooperation")
+
+```
+
+### Correlations between the cooperation index and the other predictors 
+
+```{r}
+
+ long_data %>% 
+  filter(measure1 == "Cooperation index",
+         !measure2 %in% c("Unselfishness", "Tolerance")) %>% 
+  drop_na(value1, value2) %>% 
+  group_by(measure2) %>% 
+  summarise(n = n(), r = round(cor(value1, value2), 2))
+
+
+```
+
+
+```{r, fig.width=7, fig.height=5, fig.cap="Figure 1. Scatter plot of the cooperation index against the valuation of tolerance in 62 societies, abbreviated according to the ISO three-letter standard. The regression line explains 34% of the variance."}
+
+coop %>% 
+  ggplot(aes(child_tolerance, coop_index, label = code)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE,
+              color = "grey30") +
+  ggrepel::geom_text_repel(size = 3) +
+  labs(x = "Valuation of tolerance", y = "Cooperation index") +
+  theme_classic(13)
+
+# ggsave("fig1_coop-by-tolerance.jpeg", width = 7, height = 5, dpi = 350)
+
+```
+
+## Individual-Level Analysis
+
+```{r}
+
+cp_ind_sc <- cp_ind %>% 
+  mutate_at(vars(coopnorm, gossipmetanorm, againstphysmetanorm,
+                 Important_children_9, Important_children_5,
+                 Important_children_9_mean, Important_children_5_mean),
+            ~scale(.)[,1])
+
+m1 <- lmer(coopnorm ~ Important_children_9 +
+             Important_children_5 + Important_children_9_mean +
+             Important_children_5_mean + (1|SiteCountry), cp_ind_sc)
+
+m2 <- lmer(gossipmetanorm ~ Important_children_9 +
+             Important_children_5 + Important_children_9_mean +
+             Important_children_5_mean + (1|SiteCountry), cp_ind_sc)
+
+m3 <- lmer(againstphysmetanorm ~ Important_children_9 +
+             Important_children_5 + Important_children_9_mean +
+             Important_children_5_mean + (1|SiteCountry), cp_ind_sc)
+
+msummary(list("Cooperative norm" = m1, 
+              "Metanorm in favor of gossip" = m2, 
+              "Metanorm against physical confrontation" = m3), 
+         coef_map = c(
+           "Important_children_9" = "Individual valuation of unselfishness",
+           "Important_children_5" = "Individual valuation of tolerance", 
+           "Important_children_9_mean" = "Societal valuation of unselfishness",
+           "Important_children_5_mean" = "Societal valuation of tolerance"
+           ),
+         gof_omit = "IC|Log|REM",
+         statistic = "conf.int", 
+         fmt = "%.2f", 
+         statistic_vertical = FALSE,
+         title = "Table 5. Fixed effects from mixed linear models.",
+         note = "Based on data from n = 17,888 participants who completed metanorm measures in the study of Eriksson et al. (2021).")
+
+```
+
+# Supplementary Figures
+
+```{r fig.width=7, fig.height=5, fig.cap="Supplementary Figure 1. Pearson correlations between cooperative measures and predictors of cooperation. Error bars signify 95% confidence intervals. Note that samples sizes vary across cooperative measures and predictors."}
+
+cor_ci_forpl <- long_data %>% 
+  drop_na(value1, value2) %>% 
+  filter(measure1 != "Cooperation index") %>% 
+  group_nest(measure1, measure2) %>% 
+  mutate(b = map(data, ~boot::boot(., boot_cor, R = 2000)), 
+         map_df(b, tidy, conf.int = TRUE, conf.method = "bca"))
+
+cor_ci_forpl %>% 
+  mutate(measure2 = fct_rev(measure2)) %>% 
+  ggplot(aes(measure2, statistic, ymin = conf.low, ymax = conf.high)) +
+  geom_pointrange() +
+  geom_hline(yintercept = 0, color = "grey30") +
+  labs(x = NULL, y = "Pearson r") +
+  coord_flip() +
+  facet_wrap(~measure1) +
+  theme_bw(base_size = 12) 
+
+# ggsave("sfig1_coop-measrs-and-predictors-r.jpeg", 
+#        width = 7, height = 5,
+#        dpi = 350)
+
+```
+
+
